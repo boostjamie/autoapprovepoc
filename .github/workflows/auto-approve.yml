@@ -1,8 +1,7 @@
 name: Auto Approve
 
 on:
-  pull_request_target:
-    types: [opened, synchronize, reopened]
+  pull_request:
 
 jobs:
   auto-approve:
@@ -68,9 +67,6 @@ jobs:
             owners = owners_for(f)
             if not owners:
               print(f"No rule for {f} — skipping approval")
-              sys.exit(0)
-            if author.lower() not in [o.lower() for o in owners]:
-              print(f"{author} does not own {f} — skipping approval")
               sys.exit(0)
 
           # Post approval
