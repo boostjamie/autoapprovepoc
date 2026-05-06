@@ -1,0 +1,83 @@
+name: Auto Approve
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  auto-approve:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: read
+
+    steps:
+      - name: Checkout master
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          sparse-checkout: .github/CODEOWNERS
+          sparse-checkout-cone-mode: false
+
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: "3618190"
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Check ownership and approve
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          python3 - <<'EOF'
+          import os, sys, fnmatch, subprocess, json
+
+          author = "@" + os.environ["PR_AUTHOR"]
+          repo   = os.environ["REPO"]
+          pr     = os.environ["PR_NUMBER"]
+
+          # Parse CODEOWNERS — last matching rule wins
+          rules = []
+          for line in open(".github/CODEOWNERS"):
+            line = line.strip()
+            if not line or line.startswith("#"):
+              continue
+            parts = line.split()
+            rules.append((parts[0].lstrip("/"), parts[1:]))
+
+          def owners_for(path):
+            matched = []
+            for pattern, owners in rules:
+              if fnmatch.fnmatch(path, pattern) or fnmatch.fnmatch(path, pattern + "/*"):
+                matched = owners
+            return matched
+
+          # Get changed files
+          result = subprocess.run(
+            ["gh", "api", f"/repos/{repo}/pulls/{pr}/files", "--paginate", "--jq", ".[].filename"],
+            capture_output=True, text=True, check=True
+          )
+          files = result.stdout.strip().splitlines()
+
+          # Check every file
+          for f in files:
+            owners = owners_for(f)
+            if not owners:
+              print(f"No rule for {f} — skipping approval")
+              sys.exit(0)
+            if author.lower() not in [o.lower() for o in owners]:
+              print(f"{author} does not own {f} — skipping approval")
+              sys.exit(0)
+
+          # Post approval
+          subprocess.run(
+            ["gh", "pr", "review", pr, "--repo", repo, "--approve",
+             "--body", f"Auto-approved: {author} owns all changed files."],
+            check=True
+          )
+          print(f"Approved PR #{pr}")
+          EOF
